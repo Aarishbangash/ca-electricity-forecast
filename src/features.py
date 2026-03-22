@@ -66,6 +66,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["solar_daytime"] = (
         df["solar_radiation_wm2"] * df["is_daytime"])
 
+    df["temp_bin"] = pd.cut(
+        df["temperature_c"],
+        bins   = [-np.inf, 5, 10, 15, 20, 25, 30, np.inf],
+        labels = [0, 1, 2, 3, 4, 5, 6]
+    ).astype(float)
+
     for lag in [1, 2, 3, 6, 12, 24, 48, 168]:
         df[f"demand_lag_{lag}h"] = df["demand_mwh"].shift(lag)
 
@@ -89,6 +95,12 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
               .rolling(window, min_periods=1).mean()
         )
 
+        # ── temp_bin feature ──────────────────────────────────
+    df["temp_bin"] = pd.cut(
+        df["temperature_c"],
+        bins    = [-np.inf, 5, 10, 15, 20, 25, 30, np.inf],
+        labels  = [0, 1, 2, 3, 4, 5, 6]
+    ).astype(float)
     return df
 
 
