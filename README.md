@@ -1,5 +1,13 @@
-<<<<<<< HEAD
-# California Electricity Demand Forecast
+---
+title: Ca Electricity Forecast
+emoji: ⚡
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 
 24-hour ahead demand forecasting for California (CISO region).
 
@@ -37,6 +45,4 @@ data/
 - GET /download?date CSV download
 - GET /metrics       Model metrics
 - GET /health        Health check
-=======
-# ca-electricity-forecast
->>>>>>> 90dc84f6739d6cff804c2dd4cc3a3ea0d73479d6
+
