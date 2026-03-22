@@ -231,12 +231,19 @@
 
 <script>
   // Default date = tomorrow
-  (function() {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    document.getElementById("date-input").value =
-      d.toISOString().split("T")[0];
-  })();
+ (function() {
+    const today    = new Date();
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    const fmt = d => d.toISOString().split("T")[0];
+
+    // Set min and max allowed dates
+    const input = document.getElementById("date-input");
+    input.min   = fmt(today);
+    input.max   = fmt(tomorrow);
+    input.value = fmt(tomorrow);   // default = tomorrow
+})();
 
   async function loadMetrics() {
     try {
