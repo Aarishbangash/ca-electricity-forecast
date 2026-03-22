@@ -94,7 +94,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_inference_row(historical_df, forecast_weather,
                          target_date, feature_cols):
-    TIMEZONE   = "America/Los_Angeles"
+    TIMEZONE = "America/Los_Angeles"
 
     forecast_weather = forecast_weather.copy()
     forecast_weather["timestamp"] = pd.to_datetime(
@@ -106,39 +106,77 @@ def build_inference_row(historical_df, forecast_weather,
         historical_df["timestamp"]
     ).dt.tz_convert(TIMEZONE)
 
+    # Sort history and keep enough rows for all lags
+    # Max lag = 168h (1 week) so need at least 168 rows
+    historical_df = historical_df.sort_values(
+        "timestamp").tail(200).reset_index(drop=True)
+
+    # Check we have enough history
+    print(f"  History rows : {len(historical_df)}")
+    print(f"  History end  : {historical_df['timestamp'].max()}")
+    print(f"  Null demand  : {historical_df['demand_mwh'].isna().sum()}")
+
+    # Fill any null demand with forward fill then backfill
+    historical_df["demand_mwh"] = (
+        historical_df["demand_mwh"]
+        .fillna(method="ffill")
+        .fillna(method="bfill")
+    )
+
+    # Filter forecast to target date only
     target_dt   = pd.to_datetime(target_date).date()
     target_rows = forecast_weather[
         forecast_weather["timestamp"].dt.date == target_dt
     ].copy()
 
+    print(f"  Target rows  : {len(target_rows)}")
+    print(f"  Target date  : {target_dt}")
+
     if len(target_rows) == 0:
+        available = forecast_weather[
+            "timestamp"].dt.date.unique()
         raise ValueError(
             f"No forecast weather for {target_date}. "
-            f"Available: "
-            f"{forecast_weather['timestamp'].dt.date.unique()}")
+            f"Available dates: {available}")
 
-    target_rows["demand_mwh"] = np.nan
+    # Add placeholder demand for target rows
+    # Use last known demand as placeholder
+    last_known_demand = historical_df["demand_mwh"].iloc[-1]
+    target_rows["demand_mwh"] = last_known_demand
 
+    # Keep only needed columns
     keep_cols = ["timestamp", "demand_mwh",
                  "temperature_c", "humidity_pct",
                  "wind_speed_kmh", "solar_radiation_wm2",
                  "precipitation_mm"]
+
     hist_cols = [c for c in keep_cols
                  if c in historical_df.columns]
 
+    # Combine history + target
     combined = pd.concat(
         [historical_df[hist_cols],
          target_rows[keep_cols]],
         ignore_index=True
     ).sort_values("timestamp").reset_index(drop=True)
 
+    print(f"  Combined rows: {len(combined)}")
+
+    # Build features on combined data
     featured = build_features(combined)
 
+    # Return only target date rows
     mask   = (featured["timestamp"].dt.date == target_dt)
     result = featured[mask].copy()
 
+    print(f"  Result rows  : {len(result)}")
+    print(f"  Result nulls : {result[feature_cols].isnull().sum().sum()}")
+
+    # Fill any remaining nulls with 0
     for c in feature_cols:
         if c not in result.columns:
             result[c] = 0.0
+
+    result[feature_cols] = result[feature_cols].fillna(0)
 
     return result[feature_cols].reset_index(drop=True)
