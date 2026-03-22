@@ -1,0 +1,64 @@
+name: Daily Model Retrain
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            xgboost==2.0.3 \
+            scikit-learn==1.3.2 \
+            pandas==2.1.4 \
+            numpy==1.26.2 \
+            requests==2.31.0 \
+            holidays==0.39 \
+            openmeteo-requests==1.1.0 \
+            requests-cache==1.1.1 \
+            retry-requests==2.0.0
+
+      - name: Run retrain pipeline
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python -m src.retrain
+
+      - name: Commit updated model and data
+        run: |
+          git config --global user.email "retrain-bot@github.com"
+          git config --global user.name  "Retrain Bot"
+          git add models/model_xgboost.pkl
+          git add models/metrics.json
+          git add data/ca_electricity_raw.csv
+          git diff --staged --quiet || git commit -m "Auto retrain $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print summary
+        run: |
+          echo "Retrain complete at $(date -u)"
+          cat models/metrics.json

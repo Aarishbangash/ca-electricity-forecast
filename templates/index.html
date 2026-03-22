@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>California Electricity Forecast</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f0f2f5;
+      color: #2d3748;
+    }
+    header {
+      background: linear-gradient(135deg,#1a237e,#283593);
+      color: white;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+    }
+    header h1 { font-size:1.3rem; font-weight:700; }
+    header p  { font-size:0.8rem; opacity:0.75; margin-top:3px; }
+    .badge {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .container { max-width:1180px; margin:0 auto; padding:28px 20px; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px,1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: white;
+      border-radius: 14px;
+      padding: 22px 20px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+      border-top: 3px solid #1a237e;
+    }
+    .card-label {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #718096;
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-size: 1.7rem;
+      font-weight: 800;
+      color: #1a237e;
+      line-height: 1;
+    }
+    .card-value.sm { font-size:1rem; }
+    .card-sub { font-size:0.72rem; color:#a0aec0; margin-top:5px; }
+    .panel {
+      background: white;
+      border-radius: 14px;
+      padding: 24px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+      margin-bottom: 20px;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .panel-title { font-size:1rem; font-weight:700; color:#1a237e; }
+    .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    input[type="date"] {
+      padding: 8px 14px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      outline: none;
+    }
+    input[type="date"]:focus { border-color:#1a237e; }
+    .btn {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary { background:#1a237e; color:white; }
+    .btn-green   { background:#38a169; color:white; }
+    .spinner {
+      display: none;
+      width: 18px; height: 18px;
+      border: 2.5px solid #e2e8f0;
+      border-top-color: #1a237e;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    #chart-placeholder {
+      height: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #a0aec0;
+      border: 2px dashed #e2e8f0;
+      border-radius: 10px;
+    }
+    .table-wrap { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+    thead th {
+      background:#f7f8fc;
+      padding:10px 14px;
+      text-align:left;
+      font-weight:700;
+      color:#4a5568;
+      border-bottom:2px solid #e2e8f0;
+    }
+    tbody td { padding:9px 14px; border-bottom:1px solid #f0f2f5; color:#4a5568; }
+    tbody tr:hover td { background:#f7f8fc; }
+    .td-peak { color:#c53030; font-weight:700; }
+    .td-empty { text-align:center; color:#a0aec0; padding:32px !important; }
+    .error-box {
+      background:#fff5f5; border:1px solid #feb2b2;
+      color:#c53030; padding:12px 16px;
+      border-radius:8px; font-size:0.88rem; margin-top:12px;
+    }
+    footer {
+      text-align:center; padding:20px;
+      color:#a0aec0; font-size:0.78rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>⚡ California Electricity Demand Forecast</h1>
+    <p>CISO region · XGBoost · 24-hour ahead prediction · Retrained daily</p>
+  </div>
+  <span class="badge" id="live-badge">Loading...</span>
+</header>
+
+<div class="container">
+
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Model MAPE</div>
+      <div class="card-value" id="card-mape">—</div>
+      <div class="card-sub">Test set accuracy</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Last Retrain</div>
+      <div class="card-value sm" id="card-retrain">—</div>
+      <div class="card-sub">Auto daily at 2:00 AM UTC</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Training Rows</div>
+      <div class="card-value" id="card-rows">—</div>
+      <div class="card-sub">Rolling 5-year window</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Data Range</div>
+      <div class="card-value sm" id="card-range">—</div>
+      <div class="card-sub">Historical coverage</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">📈 24-Hour Demand Forecast</span>
+      <div class="controls">
+        <input type="date" id="date-input"/>
+        <button class="btn btn-primary" onclick="loadForecast()">
+          Generate Forecast
+        </button>
+        <button class="btn btn-green" onclick="downloadCSV()">
+          ⬇ Download CSV
+        </button>
+        <div class="spinner" id="spinner"></div>
+      </div>
+    </div>
+    <div id="chart-placeholder">
+      Select a date and click Generate Forecast
+    </div>
+    <div id="forecast-chart" style="display:none;height:420px"></div>
+    <div id="error-area"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <span class="panel-title">🕐 Hourly Forecast Values</span>
+      <span id="table-summary"
+            style="font-size:0.82rem;color:#718096"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Time</th>
+            <th>Forecast (MWh)</th>
+            <th>vs Daily Average</th>
+          </tr>
+        </thead>
+        <tbody id="table-body">
+          <tr>
+            <td colspan="4" class="td-empty">
+              No forecast yet — click Generate Forecast
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  California ISO (CISO) · EIA API + Open-Meteo ·
+  GitHub Actions daily retrain · HuggingFace Spaces
+</footer>
+
+<script>
+  // Default date = tomorrow
+  (function() {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    document.getElementById("date-input").value =
+      d.toISOString().split("T")[0];
+  })();
+
+  async function loadMetrics() {
+    try {
+      const res  = await fetch("/metrics");
+      const data = await res.json();
+
+      if (data.xgboost_mape && data.xgboost_mape !== "N/A")
+        document.getElementById("card-mape").textContent =
+          data.xgboost_mape + "%";
+
+      if (data.last_retrain !== "Not available") {
+        const dt = new Date(data.last_retrain);
+        document.getElementById("card-retrain").textContent =
+          dt.toLocaleDateString("en-US",{
+            month:"short", day:"numeric", year:"numeric"
+          });
+      }
+
+      if (data.train_rows && data.train_rows !== "N/A")
+        document.getElementById("card-rows").textContent =
+          parseInt(data.train_rows).toLocaleString();
+
+      if (data.data_from && data.data_to)
+        document.getElementById("card-range").textContent =
+          data.data_from + " → " + data.data_to;
+
+      document.getElementById("live-badge").textContent = "● Live";
+
+    } catch(e) {
+      document.getElementById("live-badge").textContent = "⚠ Offline";
+    }
+  }
+
+  async function loadForecast() {
+    const date    = document.getElementById("date-input").value;
+    const spinner = document.getElementById("spinner");
+    const errArea = document.getElementById("error-area");
+    errArea.innerHTML = "";
+
+    if (!date) {
+      errArea.innerHTML =
+        '<div class="error-box">Please select a date.</div>';
+      return;
+    }
+
+    spinner.style.display = "block";
+
+    try {
+      const [chartRes, predRes] = await Promise.all([
+        fetch(`/chart?date=${date}`),
+        fetch(`/predict?date=${date}`),
+      ]);
+
+      const chartData = await chartRes.json();
+      const predData  = await predRes.json();
+
+      if (chartData.error) throw new Error(chartData.error);
+      if (predData.error)  throw new Error(predData.error);
+
+      // Show chart
+      document.getElementById("chart-placeholder")
+        .style.display = "none";
+      const chartDiv = document.getElementById("forecast-chart");
+      chartDiv.style.display = "block";
+
+      Plotly.newPlot(
+        "forecast-chart",
+        chartData.data,
+        chartData.layout,
+        { responsive:true, displayModeBar:false }
+      );
+
+      // Populate table
+      const preds   = predData.predictions;
+      const times   = predData.timestamps;
+      const avg     = preds.reduce((a,b)=>a+b,0) / preds.length;
+      const peakVal = Math.max(...preds);
+      const tbody   = document.getElementById("table-body");
+      tbody.innerHTML = "";
+
+      preds.forEach((val, i) => {
+        const time  = new Date(times[i]).toLocaleTimeString(
+          "en-US",{hour:"2-digit",minute:"2-digit"});
+        const diff  = val - avg;
+        const dStr  = (diff>=0?"+":"") + diff.toFixed(0) + " MWh";
+        const isPeak= val === peakVal;
+
+        tbody.innerHTML += `
+          <tr>
+            <td>h+${i+1}</td>
+            <td>${time}</td>
+            <td class="${isPeak?"td-peak":""}">
+              ${val.toLocaleString()} MWh
+              ${isPeak?" 🔺 Peak":""}
+            </td>
+            <td style="color:${diff>=0?"#c53030":"#276749"}">
+              ${dStr}
+            </td>
+          </tr>`;
+      });
+
+      document.getElementById("table-summary").textContent =
+        `Avg: ${avg.toFixed(0)} MWh  ·  `+
+        `Peak: ${peakVal.toLocaleString()} MWh  ·  `+
+        `Min: ${Math.min(...preds).toLocaleString()} MWh`;
+
+    } catch(e) {
+      errArea.innerHTML =
+        `<div class="error-box">⚠ ${e.message}</div>`;
+    } finally {
+      spinner.style.display = "none";
+    }
+  }
+
+  function downloadCSV() {
+    const date = document.getElementById("date-input").value;
+    if (!date) return;
+    window.location.href = `/download?date=${date}`;
+  }
+
+  loadMetrics();
+</script>
+</body>
+</html>

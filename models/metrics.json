@@ -1,0 +1,8 @@
+{
+  "last_retrain": "Initial deployment",
+  "train_rows": 34905,
+  "val_rows": 4366,
+  "xgboost_mape": 3.38,
+  "data_from": "2021-03-19",
+  "data_to": "2026-03-19"
+}
