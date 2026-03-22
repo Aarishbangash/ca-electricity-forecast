@@ -33,7 +33,7 @@ def load_models():
         raise FileNotFoundError(
             f"model_xgboost.pkl not found in {MODELS_DIR}")
 
-    metrics_path = os.path.join(MODEL_DIR, "metrics.json")
+    metrics_path = os.path.join(MODELS_DIR, "metrics.json")
     metrics_path = os.path.join(MODELS_DIR, "metrics.json")
     if os.path.exists(metrics_path):
         with open(metrics_path) as f:
