@@ -230,6 +230,34 @@ def download():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@app.route("/debug")
+def debug():
+    try:
+        target_date  = request.args.get("date", _default_date())
+        models       = load_models()
+        FEATURE_COLS = models["feature_cols"]
+        df_hist      = _get_historical()
+        forecast_weather = fetch_weather_forecast()
+
+        X_feat = build_inference_row(
+            df_hist, forecast_weather,
+            target_date, FEATURE_COLS)
+
+        return jsonify({
+            "target_date"     : target_date,
+            "hist_rows"       : len(df_hist),
+            "hist_date_min"   : str(df_hist["timestamp"].min()),
+            "hist_date_max"   : str(df_hist["timestamp"].max()),
+            "X_feat_shape"    : list(X_feat.shape),
+            "X_feat_nulls"    : int(X_feat.isnull().sum().sum()),
+            "X_feat_sample"   : X_feat.head(2).to_dict(),
+            "forecast_rows"   : len(forecast_weather),
+            "forecast_min"    : str(forecast_weather["timestamp"].min()),
+            "forecast_max"    : str(forecast_weather["timestamp"].max()),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(
