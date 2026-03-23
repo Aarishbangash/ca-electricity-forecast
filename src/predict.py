@@ -33,7 +33,7 @@ def load_models():
         raise FileNotFoundError(
             f"model_xgboost.pkl not found in {MODELS_DIR}")
 
-    metrics_path = os.path.join(MODELS_DIR, "metrics.json")
+   
     metrics_path = os.path.join(MODELS_DIR, "metrics.json")
     if os.path.exists(metrics_path):
         with open(metrics_path) as f:
@@ -52,15 +52,28 @@ def predict_24h(X_features):
     return Y_pred.ravel()[:HORIZON]
 
 
-def get_metrics():
-    models = load_models()
-    return models.get("metrics", {
-        "last_retrain" : "Not available",
-        "xgboost_mape" : "N/A",
-        "train_rows"   : "N/A",
-        "data_from"    : "N/A",
-        "data_to"      : "N/A",
-    })
+# src/predict.py
+def get_metrics(reload=True):
+    """
+    Return latest metrics. If reload=True, read fresh from disk.
+    """
+    global _CACHE
+    metrics_path = os.path.join(MODELS_DIR, "metrics.json")
+    
+    if reload or "metrics" not in _CACHE:
+        if os.path.exists(metrics_path):
+            with open(metrics_path) as f:
+                _CACHE["metrics"] = json.load(f)
+        else:
+            _CACHE["metrics"] = {
+                "last_retrain": "Not available",
+                "xgboost_mape": "N/A",
+                "train_rows": "N/A",
+                "data_from": "N/A",
+                "data_to": "N/A",
+            }
+    
+    return _CACHE["metrics"]
 
 
 def reload_models():
