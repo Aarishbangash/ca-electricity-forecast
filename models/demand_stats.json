@@ -1,0 +1,14 @@
+import pandas as pd
+import json
+
+df = pd.read_csv('data/ca_electricity_raw.csv')
+stats = {
+    "min": float(df['demand_mwh'].min()),
+    "max": float(df['demand_mwh'].max()),
+    "mean": float(df['demand_mwh'].mean()),
+}
+
+with open('models/demand_stats.json', 'w') as f:
+    json.dump(stats, f, indent=2)
+
+print(f"Created demand_stats.json with min={stats['min']:.0f}, max={stats['max']:.0f}")

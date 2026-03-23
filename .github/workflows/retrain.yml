@@ -26,6 +26,8 @@ jobs:
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
@@ -50,9 +52,14 @@ jobs:
         run: |
           git config --global user.email "retrain-bot@github.com"
           git config --global user.name  "Retrain Bot"
+          
+          # Add all files that might have changed during retraining
           git add models/model_xgboost.pkl
           git add models/metrics.json
+          git add models/demand_stats.json
           git add data/ca_electricity_raw.csv
+          
+          # Only commit if there are changes
           git diff --staged --quiet || git commit -m "Auto retrain $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
         env:
@@ -60,5 +67,26 @@ jobs:
 
       - name: Print summary
         run: |
+          echo "=========================================="
           echo "Retrain complete at $(date -u)"
-          cat models/metrics.json
+          echo "=========================================="
+          echo ""
+          echo "Metrics:"
+          if [ -f models/metrics.json ]; then
+            cat models/metrics.json
+          else
+            echo "  metrics.json not found"
+          fi
+          echo ""
+          echo "Demand Stats:"
+          if [ -f models/demand_stats.json ]; then
+            cat models/demand_stats.json
+          else
+            echo "  demand_stats.json not found"
+          fi
+          echo ""
+          echo "Data file info:"
+          if [ -f data/ca_electricity_raw.csv ]; then
+            wc -l data/ca_electricity_raw.csv
+            head -n 2 data/ca_electricity_raw.csv
+          fi
