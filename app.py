@@ -15,7 +15,9 @@ from flask import (Flask, jsonify, render_template,
 import plotly.graph_objects as go
 import plotly.utils
 
-from src.ingestion import fetch_weather_forecast
+from src.ingestion import (fetch_weather_forecast,
+                            fetch_eia_day,
+                            fetch_weather_archive)
 from src.features  import build_inference_row
 from src.predict   import load_models, predict_24h, get_metrics
 
@@ -28,18 +30,148 @@ load_models()
 print("Ready")
 
 
-def _get_historical():
+# ════════════════════════════════════════════════════════
+# Core helpers
+# ════════════════════════════════════════════════════════
+
+def _load_and_update_history():
+    """
+    Load historical data.
+    Fetch ALL missing days since last saved date.
+    If EIA down — fill gap with pattern repeat.
+    Returns updated dataframe.
+    """
     df = pd.read_csv(DATA_PATH)
     df["timestamp"] = pd.to_datetime(
         df["timestamp"], utc=True
     ).dt.tz_convert(TIMEZONE)
-    return df.tail(300).copy()
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
+    last_date = df["timestamp"].max().date()
+    today     = pd.Timestamp.now(tz=TIMEZONE).date()
+    api_key   = os.environ.get("EIA_API_KEY", "")
+
+    print(f"  Data ends : {last_date}")
+    print(f"  Today     : {today}")
+
+    # Fill every missing day up to yesterday
+    yesterday = today - timedelta(days=1)
+    cur_date  = last_date + timedelta(days=1)
+
+    while cur_date <= yesterday:
+        date_str = cur_date.strftime("%Y-%m-%d")
+        print(f"  Filling   : {date_str}")
+        filled = False
+
+        # Try real EIA data first
+        if api_key:
+            try:
+                eia_df     = fetch_eia_day(api_key, date_str)
+                weather_df = fetch_weather_archive(date_str)
+
+                if eia_df is not None and weather_df is not None:
+                    eia_df["timestamp"] = pd.to_datetime(
+                        eia_df["timestamp"]
+                    ).dt.tz_convert(TIMEZONE)
+                    weather_df["timestamp"] = pd.to_datetime(
+                        weather_df["timestamp"]
+                    ).dt.tz_convert(TIMEZONE)
+
+                    new_day = pd.merge(
+                        eia_df, weather_df,
+                        on="timestamp", how="inner")
+
+                    df = pd.concat(
+                        [df, new_day], ignore_index=True
+                    ).drop_duplicates("timestamp"
+                    ).sort_values("timestamp"
+                    ).reset_index(drop=True)
+
+                    print(f"  EIA added : {len(new_day)} rows")
+                    filled = True
+            except Exception as e:
+                print(f"  EIA error : {e}")
+
+        # Fallback — repeat last known day pattern
+        if not filled:
+            print(f"  Using pattern repeat for {date_str}")
+            last_available = df["timestamp"].max().date()
+            last_day_rows  = df[
+                df["timestamp"].dt.date == last_available
+            ].copy()
+
+            if len(last_day_rows) > 0:
+                new_rows = last_day_rows.copy()
+                days_diff = (cur_date - last_available).days
+                new_rows["timestamp"] = (
+                    new_rows["timestamp"]
+                    + pd.Timedelta(days=days_diff))
+                df = pd.concat(
+                    [df, new_rows], ignore_index=True
+                ).drop_duplicates("timestamp"
+                ).sort_values("timestamp"
+                ).reset_index(drop=True)
+                print(f"  Pattern   : added {len(new_rows)} rows")
+
+        cur_date += timedelta(days=1)
+
+    return df
 
 
-def _default_date():
-    return (datetime.now() + timedelta(days=1)
-            ).strftime("%Y-%m-%d")
+def _get_prediction_date(df):
+    """
+    Always predict next day after last available data.
+    Data till March 21 → predict March 22
+    Data till March 23 → predict March 24
+    """
+    last_date       = df["timestamp"].max().date()
+    prediction_date = last_date + timedelta(days=1)
+    return prediction_date.strftime("%Y-%m-%d")
 
+
+def _run_prediction():
+    """
+    Core prediction logic used by all routes.
+    Returns (predictions, timestamps, target_date, df_hist)
+    """
+    models       = load_models()
+    FEATURE_COLS = models["feature_cols"]
+
+    # Load + update history
+    df_hist     = _load_and_update_history()
+    target_date = _get_prediction_date(df_hist)
+
+    print(f"  Predicting: {target_date}")
+
+    # Fetch weather forecast
+    forecast_weather = fetch_weather_forecast()
+    if forecast_weather is None:
+        raise ValueError("Weather API unavailable")
+
+    # Build inference features
+    X_feat = build_inference_row(
+        df_hist, forecast_weather,
+        target_date, FEATURE_COLS)
+
+    if len(X_feat) == 0:
+        raise ValueError(f"No features built for {target_date}")
+
+    # Predict
+    predictions = predict_24h(X_feat.values)
+
+    # Build timestamps
+    base = pd.Timestamp(target_date, tz=TIMEZONE)
+    timestamps = [
+        (base + pd.Timedelta(hours=h)).isoformat()
+        for h in range(24)
+    ]
+
+    return predictions, timestamps, target_date, df_hist
+
+
+# ════════════════════════════════════════════════════════
+# Routes
+# ════════════════════════════════════════════════════════
 
 @app.route("/")
 def index():
@@ -62,32 +194,8 @@ def metrics():
 @app.route("/predict")
 def predict():
     try:
-        target_date  = request.args.get("date", _default_date())
-        models       = load_models()
-        FEATURE_COLS = models["feature_cols"]
-
-        df_hist          = _get_historical()
-        forecast_weather = fetch_weather_forecast()
-
-        if forecast_weather is None:
-            return jsonify({"error": "Weather API failed"}), 503
-
-        X_feat = build_inference_row(
-            df_hist, forecast_weather,
-            target_date, FEATURE_COLS)
-
-        if len(X_feat) == 0:
-            return jsonify({
-                "error": f"No data for {target_date}"
-            }), 400
-
-        predictions = predict_24h(X_feat.values)
-
-        base = pd.Timestamp(target_date, tz=TIMEZONE)
-        timestamps = [
-            (base + pd.Timedelta(hours=h)).isoformat()
-            for h in range(24)
-        ]
+        predictions, timestamps, target_date, _ = \
+            _run_prediction()
 
         return jsonify({
             "date"        : target_date,
@@ -98,7 +206,6 @@ def predict():
                 round(float(v), 1) for v in predictions
             ],
         })
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -106,39 +213,17 @@ def predict():
 @app.route("/chart")
 def chart():
     try:
-        target_date = request.args.get("date", _default_date())
+        predictions, timestamps, target_date, _ = \
+            _run_prediction()
 
-        models       = load_models()
-        FEATURE_COLS = models["feature_cols"]
-
-        df_hist          = _get_historical()
-        forecast_weather = fetch_weather_forecast()
-
-        if forecast_weather is None:
-            return jsonify({"error": "Weather API failed"}), 503
-
-        X_feat = build_inference_row(
-            df_hist, forecast_weather,
-            target_date, FEATURE_COLS)
-
-        if len(X_feat) == 0:
-            return jsonify({
-                "error": f"No data for {target_date}"
-            }), 400
-
-        predictions = predict_24h(X_feat.values)
-
-        base = pd.Timestamp(target_date, tz=TIMEZONE)
-        timestamps = [
-            (base + pd.Timedelta(hours=h)).isoformat()
-            for h in range(24)
-        ]
+        preds_list = [round(float(v), 1)
+                      for v in predictions]
 
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
             x         = timestamps,
-            y         = [round(float(v), 1) for v in predictions],
+            y         = preds_list,
             name      = "XGBoost Forecast",
             line      = dict(color="#1a237e", width=2.5),
             mode      = "lines+markers",
@@ -147,11 +232,11 @@ def chart():
             fillcolor = "rgba(26,35,126,0.07)",
         ))
 
-        peak_idx = int(np.argmax(predictions))
+        peak_idx = int(np.argmax(preds_list))
         fig.add_annotation(
             x           = timestamps[peak_idx],
-            y           = float(predictions[peak_idx]),
-            text        = f"Peak: {predictions[peak_idx]:,.0f} MWh",
+            y           = preds_list[peak_idx],
+            text        = f"Peak: {preds_list[peak_idx]:,.0f} MWh",
             showarrow   = True,
             arrowhead   = 2,
             arrowcolor  = "#c62828",
@@ -162,11 +247,17 @@ def chart():
         )
 
         fig.update_layout(
-            title     = f"24h Electricity Demand Forecast — {target_date}",
-            xaxis     = dict(title="Time", tickformat="%H:%M",
-                             showgrid=True, gridcolor="#f0f0f0"),
-            yaxis     = dict(title="Demand (MWh)",
-                             showgrid=True, gridcolor="#f0f0f0"),
+            title     = (f"24h Electricity Demand Forecast"
+                         f" — California ({target_date})"),
+            xaxis     = dict(
+                title      = "Time",
+                tickformat = "%H:%M",
+                showgrid   = True,
+                gridcolor  = "#f0f0f0"),
+            yaxis     = dict(
+                title    = "Demand (MWh)",
+                showgrid = True,
+                gridcolor= "#f0f0f0"),
             template  = "plotly_white",
             hovermode = "x unified",
             height    = 420,
@@ -180,31 +271,12 @@ def chart():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/download")
 def download():
     try:
-        target_date = request.args.get("date", _default_date())
-
-        models       = load_models()
-        FEATURE_COLS = models["feature_cols"]
-
-        df_hist          = _get_historical()
-        forecast_weather = fetch_weather_forecast()
-
-        if forecast_weather is None:
-            return jsonify({"error": "Weather API failed"}), 503
-
-        X_feat = build_inference_row(
-            df_hist, forecast_weather,
-            target_date, FEATURE_COLS)
-
-        predictions = predict_24h(X_feat.values)
-
-        base = pd.Timestamp(target_date, tz=TIMEZONE)
-        timestamps = [
-            (base + pd.Timedelta(hours=h)).isoformat()
-            for h in range(24)
-        ]
+        predictions, timestamps, target_date, _ = \
+            _run_prediction()
 
         rows = []
         for i, ts in enumerate(timestamps):
@@ -227,37 +299,33 @@ def download():
             as_attachment  = True,
             download_name  = f"ca_forecast_{target_date}.csv",
         )
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
+
 @app.route("/debug")
 def debug():
     try:
-        target_date  = request.args.get("date", _default_date())
-        models       = load_models()
-        FEATURE_COLS = models["feature_cols"]
-        df_hist      = _get_historical()
-        forecast_weather = fetch_weather_forecast()
-
-        X_feat = build_inference_row(
-            df_hist, forecast_weather,
-            target_date, FEATURE_COLS)
+        df_hist     = _load_and_update_history()
+        target_date = _get_prediction_date(df_hist)
+        models      = load_models()
+        FEATURE_COLS= models["feature_cols"]
+        fw          = fetch_weather_forecast()
+        X_feat      = build_inference_row(
+            df_hist, fw, target_date, FEATURE_COLS)
 
         return jsonify({
-            "target_date"     : target_date,
-            "hist_rows"       : len(df_hist),
-            "hist_date_min"   : str(df_hist["timestamp"].min()),
-            "hist_date_max"   : str(df_hist["timestamp"].max()),
-            "X_feat_shape"    : list(X_feat.shape),
-            "X_feat_nulls"    : int(X_feat.isnull().sum().sum()),
-            "X_feat_sample"   : X_feat.head(2).to_dict(),
-            "forecast_rows"   : len(forecast_weather),
-            "forecast_min"    : str(forecast_weather["timestamp"].min()),
-            "forecast_max"    : str(forecast_weather["timestamp"].max()),
+            "target_date"  : target_date,
+            "hist_rows"    : len(df_hist),
+            "hist_date_min": str(df_hist["timestamp"].min().date()),
+            "hist_date_max": str(df_hist["timestamp"].max().date()),
+            "X_feat_shape" : list(X_feat.shape),
+            "X_feat_nulls" : int(X_feat.isnull().sum().sum()),
+            "weather_rows" : len(fw) if fw is not None else 0,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(

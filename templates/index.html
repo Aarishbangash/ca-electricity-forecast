@@ -178,15 +178,17 @@
     <div class="panel-head">
       <span class="panel-title">📈 24-Hour Demand Forecast</span>
       <div class="controls">
-        <input type="date" id="date-input"/>
-        <button class="btn btn-primary" onclick="loadForecast()">
-          Generate Forecast
-        </button>
-        <button class="btn btn-green" onclick="downloadCSV()">
-          ⬇ Download CSV
-        </button>
-        <div class="spinner" id="spinner"></div>
-      </div>
+  <span id="forecast-date-label"
+        style="font-size:0.9rem;color:#4a5568;
+               font-weight:600"></span>
+  <button class="btn btn-primary" onclick="loadForecast()">
+    Generate Forecast
+  </button>
+  <button class="btn btn-green" onclick="downloadCSV()">
+    ⬇ Download CSV
+  </button>
+  <div class="spinner" id="spinner"></div>
+</div>
     </div>
     <div id="chart-placeholder">
       Select a date and click Generate Forecast
@@ -231,23 +233,7 @@
 
 <script>
   // Default date = tomorrow
- (function() {
-    const today    = new Date();
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    const fmt = d => d.toISOString().split("T")[0];
-
-    // Set min and max allowed dates
-    const input = document.getElementById("date-input");
-    const dayAfter = new Date();
-    dayAfter.setDate(dayAfter.getDate() + 2);
-
-    input.min   = fmt(today);
-    input.max   = fmt(dayAfter);
-    input.value = fmt(today);
-})();
-
+ 
   async function loadMetrics() {
     try {
       const res  = await fetch("/metrics");
@@ -281,23 +267,15 @@
   }
 
   async function loadForecast() {
-    const date    = document.getElementById("date-input").value;
     const spinner = document.getElementById("spinner");
     const errArea = document.getElementById("error-area");
     errArea.innerHTML = "";
-
-    if (!date) {
-      errArea.innerHTML =
-        '<div class="error-box">Please select a date.</div>';
-      return;
-    }
-
     spinner.style.display = "block";
 
     try {
       const [chartRes, predRes] = await Promise.all([
-        fetch(`/chart?date=${date}`),
-        fetch(`/predict?date=${date}`),
+        fetch(`/chart`),
+        fetch(`/predict`),
       ]);
 
       const chartData = await chartRes.json();
@@ -305,6 +283,10 @@
 
       if (chartData.error) throw new Error(chartData.error);
       if (predData.error)  throw new Error(predData.error);
+
+      // Show prediction date
+      document.getElementById("forecast-date-label")
+        .textContent = "Predicting: " + predData.date;
 
       // Show chart
       document.getElementById("chart-placeholder")
@@ -322,7 +304,7 @@
       // Populate table
       const preds   = predData.predictions;
       const times   = predData.timestamps;
-      const avg     = preds.reduce((a,b)=>a+b,0) / preds.length;
+      const avg     = preds.reduce((a,b)=>a+b,0)/preds.length;
       const peakVal = Math.max(...preds);
       const tbody   = document.getElementById("table-body");
       tbody.innerHTML = "";
@@ -331,9 +313,8 @@
         const time  = new Date(times[i]).toLocaleTimeString(
           "en-US",{hour:"2-digit",minute:"2-digit"});
         const diff  = val - avg;
-        const dStr  = (diff>=0?"+":"") + diff.toFixed(0) + " MWh";
+        const dStr  = (diff>=0?"+":"")+diff.toFixed(0)+" MWh";
         const isPeak= val === peakVal;
-
         tbody.innerHTML += `
           <tr>
             <td>h+${i+1}</td>
@@ -362,9 +343,7 @@
   }
 
   function downloadCSV() {
-    const date = document.getElementById("date-input").value;
-    if (!date) return;
-    window.location.href = `/download?date=${date}`;
+    window.location.href = `/download`;
   }
 
   loadMetrics();
