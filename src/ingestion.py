@@ -3,7 +3,6 @@
 
 import requests
 import pandas as pd
-import numpy as np
 import time
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -33,10 +32,10 @@ WEATHER_VARIABLES = [
 
 def make_session():
     session = requests.Session()
-    retry = Retry(
-    total            = 7,
-    backoff_factor   = 5,
-    status_forcelist = [429, 500, 502, 503, 504],
+    retry   = Retry(
+        total            = 7,
+        backoff_factor   = 5,
+        status_forcelist = [429, 500, 502, 503, 504],
     )
     session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
@@ -46,11 +45,7 @@ SESSION = make_session()
 
 
 def fetch_eia_day(api_key, date_str):
-    """
-    Fetch one day of EIA hourly demand.
-    Returns DataFrame with columns: timestamp, demand_mwh
-    Returns None on failure.
-    """
+    """Fetch one day of EIA hourly demand."""
     url      = "https://api.eia.gov/v2/electricity/rto/region-data/data/"
     all_rows = []
     offset   = 0
@@ -73,7 +68,7 @@ def fetch_eia_day(api_key, date_str):
             resp = SESSION.get(url, params=params, timeout=120)
             resp.raise_for_status()
         except Exception as e:
-            print(f"  EIA fetch error: {e}")
+            print(f"  EIA error: {e}")
             return None
 
         payload = resp.json()
@@ -89,7 +84,6 @@ def fetch_eia_day(api_key, date_str):
         time.sleep(1)
 
     if not all_rows:
-        print(f"  EIA: no data returned for {date_str}")
         return None
 
     df = pd.DataFrame(all_rows)
@@ -104,16 +98,16 @@ def fetch_eia_day(api_key, date_str):
             .drop_duplicates("timestamp")
             .reset_index(drop=True))
 
-    print(f"  EIA: fetched {len(df)} rows for {date_str}")
+    print(f"  EIA: {len(df)} rows for {date_str}")
     return df
 
 
-def _fetch_weather_from_url(url, params):
-    """Internal helper — fetch weather from one URL."""
+def _fetch_weather(url, params):
+    """Fetch weather from Open-Meteo and average across cities."""
     city_dfs = []
 
     for city, (lat, lon) in CITIES.items():
-        p = dict(params)
+        p            = dict(params)
         p["latitude"]  = lat
         p["longitude"] = lon
 
@@ -141,7 +135,7 @@ def _fetch_weather_from_url(url, params):
             "precipitation"        : "precipitation_mm",
         })
         city_dfs.append(df)
-        time.sleep(0.3)
+        time.sleep(0.2)
 
     if not city_dfs:
         return None
@@ -162,10 +156,7 @@ def _fetch_weather_from_url(url, params):
 
 
 def fetch_weather_archive(date_str):
-    """
-    Fetch historical weather from Open-Meteo archive.
-    Used for past dates during retraining.
-    """
+    """Fetch historical weather for a past date."""
     url    = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "start_date"     : date_str,
@@ -174,18 +165,14 @@ def fetch_weather_archive(date_str):
         "timezone"       : TIMEZONE,
         "wind_speed_unit": "kmh",
     }
-    result = _fetch_weather_from_url(url, params)
+    result = _fetch_weather(url, params)
     if result is not None:
-        print(f"  Weather archive: {len(result)} rows "
-              f"for {date_str}")
+        print(f"  Weather archive: {len(result)} rows for {date_str}")
     return result
 
 
 def fetch_weather_forecast():
-    """
-    Fetch next 2 days weather forecast from Open-Meteo.
-    Used for inference — predicting today or tomorrow.
-    """
+    """Fetch next 3 days weather forecast for inference."""
     url    = "https://api.open-meteo.com/v1/forecast"
     params = {
         "forecast_days"  : 3,
@@ -193,7 +180,7 @@ def fetch_weather_forecast():
         "timezone"       : TIMEZONE,
         "wind_speed_unit": "kmh",
     }
-    result = _fetch_weather_from_url(url, params)
+    result = _fetch_weather(url, params)
     if result is not None:
         print(f"  Weather forecast: {len(result)} rows")
     return result

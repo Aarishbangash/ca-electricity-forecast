@@ -31,14 +31,14 @@ print("Ready")
 
 
 # ════════════════════════════════════════════════════════
-# Core helpers
+# Helpers
 # ════════════════════════════════════════════════════════
 
-def _load_and_update_history():
+def _load_and_fill_history():
     """
-    Load historical data.
-    Only fetches real EIA data — never fills with pattern repeat.
-    Fake rows corrupt lag features and cause negative predictions.
+    Load historical data from CSV.
+    Fill any gap between last saved date and yesterday.
+    Uses real EIA data if available, else repeats last day pattern.
     """
     df = pd.read_csv(DATA_PATH)
     df["timestamp"] = pd.to_datetime(
@@ -47,107 +47,123 @@ def _load_and_update_history():
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     last_date = df["timestamp"].max().date()
-    today     = pd.Timestamp.now(tz=TIMEZONE).date()
+    yesterday = (pd.Timestamp.now(tz=TIMEZONE)
+                 - timedelta(days=1)).date()
     api_key   = os.environ.get("EIA_API_KEY", "")
 
     print(f"  Data ends : {last_date}")
-    print(f"  Today     : {today}")
+    print(f"  Yesterday : {yesterday}")
 
-    if not api_key:
-        print("  No EIA_API_KEY — using existing data as-is")
-        return df
-
-    yesterday = today - timedelta(days=1)
-    cur_date  = last_date + timedelta(days=1)
-
+    # Fill each missing day
+    cur_date = last_date + timedelta(days=1)
     while cur_date <= yesterday:
         date_str = cur_date.strftime("%Y-%m-%d")
-        print(f"  Filling   : {date_str}")
-        try:
-            eia_df     = fetch_eia_day(api_key, date_str)
-            weather_df = fetch_weather_archive(date_str)
+        filled   = False
 
-            if eia_df is not None and weather_df is not None:
-                eia_df["timestamp"] = pd.to_datetime(
-                    eia_df["timestamp"]
-                ).dt.tz_convert(TIMEZONE)
-                weather_df["timestamp"] = pd.to_datetime(
-                    weather_df["timestamp"]
-                ).dt.tz_convert(TIMEZONE)
+        # Try real EIA + weather data
+        if api_key:
+            try:
+                eia_df     = fetch_eia_day(api_key, date_str)
+                weather_df = fetch_weather_archive(date_str)
 
-                new_day = pd.merge(
-                    eia_df, weather_df,
-                    on="timestamp", how="inner")
+                if eia_df is not None and weather_df is not None:
+                    eia_df["timestamp"] = pd.to_datetime(
+                        eia_df["timestamp"]
+                    ).dt.tz_convert(TIMEZONE)
+                    weather_df["timestamp"] = pd.to_datetime(
+                        weather_df["timestamp"]
+                    ).dt.tz_convert(TIMEZONE)
 
+                    new_day = pd.merge(
+                        eia_df, weather_df,
+                        on="timestamp", how="inner")
+
+                    df = pd.concat(
+                        [df, new_day], ignore_index=True
+                    ).drop_duplicates("timestamp"
+                    ).sort_values("timestamp"
+                    ).reset_index(drop=True)
+
+                    print(f"  EIA added : {date_str} ({len(new_day)} rows)")
+                    filled = True
+            except Exception as e:
+                print(f"  EIA error : {e}")
+
+        # Fallback — repeat last known day pattern
+        if not filled:
+            last_available = df["timestamp"].max().date()
+            last_day_rows  = df[
+                df["timestamp"].dt.date == last_available
+            ].copy()
+
+            if len(last_day_rows) > 0:
+                new_rows = last_day_rows.copy()
+                days_diff = (cur_date - last_available).days
+                new_rows["timestamp"] = (
+                    new_rows["timestamp"]
+                    + pd.Timedelta(days=days_diff))
                 df = pd.concat(
-                    [df, new_day], ignore_index=True
+                    [df, new_rows], ignore_index=True
                 ).drop_duplicates("timestamp"
                 ).sort_values("timestamp"
                 ).reset_index(drop=True)
-
-                print(f"  EIA added : {len(new_day)} rows")
-            else:
-                print(f"  EIA no data for {date_str} — stopping fill")
-                break
-
-        except Exception as e:
-            print(f"  EIA error for {date_str}: {e} — stopping fill")
-            break
+                print(f"  Pattern   : {date_str} filled")
 
         cur_date += timedelta(days=1)
 
-    return df
+    return df.tail(300).copy()
 
 
-def _get_prediction_date(df):
+def _get_target_date(df):
     """
-    Always predict next day after last available data.
-    Data till March 21 → predict March 22
-    Data till March 23 → predict March 24
+    Prediction target = day after last data.
+    Data till March 21 → predict March 22.
+    Data till March 23 → predict March 24.
     """
-    last_date       = df["timestamp"].max().date()
-    prediction_date = last_date + timedelta(days=1)
-    return prediction_date.strftime("%Y-%m-%d")
+    last_date   = df["timestamp"].max().date()
+    target_date = last_date + timedelta(days=1)
+    return target_date.strftime("%Y-%m-%d")
 
 
-def _run_prediction():
+def _run_forecast():
     """
-    Core prediction logic used by all routes.
-    Returns (predictions, timestamps, target_date, df_hist)
+    Full forecast pipeline.
+    Returns (predictions, timestamps, target_date).
     """
     models       = load_models()
     FEATURE_COLS = models["feature_cols"]
 
-    # Load + update history
-    df_hist     = _load_and_update_history()
-    target_date = _get_prediction_date(df_hist)
+    # Load + fill history
+    df_hist     = _load_and_fill_history()
+    target_date = _get_target_date(df_hist)
 
     print(f"  Predicting: {target_date}")
 
-    # Fetch weather forecast
+    # Get weather forecast
     forecast_weather = fetch_weather_forecast()
     if forecast_weather is None:
         raise ValueError("Weather API unavailable")
 
-    # Build inference features
+    # Build features
     X_feat = build_inference_row(
         df_hist, forecast_weather,
         target_date, FEATURE_COLS)
 
     if len(X_feat) == 0:
-        raise ValueError(f"No features built for {target_date}")
+        raise ValueError(
+            f"Could not build features for {target_date}")
 
     # Predict
     predictions = predict_24h(X_feat.values)
 
-    # Build timestamps
+    # Build timestamps (hour 0 to 23 of target day)
     base = pd.Timestamp(target_date, tz=TIMEZONE)
     timestamps = [
         (base + pd.Timedelta(hours=h)).isoformat()
         for h in range(24)
     ]
 
-    return predictions, timestamps, target_date, df_hist
+    return predictions, timestamps, target_date
 
 
 # ════════════════════════════════════════════════════════
@@ -169,23 +185,20 @@ def health():
 
 @app.route("/metrics")
 def metrics():
-    return jsonify(get_metrics(reload=True))
+    return jsonify(get_metrics())
 
 
 @app.route("/predict")
 def predict():
     try:
-        predictions, timestamps, target_date, _ = \
-            _run_prediction()
-
+        predictions, timestamps, target_date = _run_forecast()
         return jsonify({
             "date"        : target_date,
             "generated_at": datetime.now().isoformat(),
             "unit"        : "MWh",
             "timestamps"  : timestamps,
-            "predictions" : [
-                round(float(v), 1) for v in predictions
-            ],
+            "predictions" : [round(float(v), 1)
+                             for v in predictions],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -194,17 +207,14 @@ def predict():
 @app.route("/chart")
 def chart():
     try:
-        predictions, timestamps, target_date, _ = \
-            _run_prediction()
-
-        preds_list = [round(float(v), 1)
-                      for v in predictions]
+        predictions, timestamps, target_date = _run_forecast()
+        preds = [round(float(v), 1) for v in predictions]
 
         fig = go.Figure()
 
         fig.add_trace(go.Scatter(
             x         = timestamps,
-            y         = preds_list,
+            y         = preds,
             name      = "XGBoost Forecast",
             line      = dict(color="#1a237e", width=2.5),
             mode      = "lines+markers",
@@ -213,11 +223,11 @@ def chart():
             fillcolor = "rgba(26,35,126,0.07)",
         ))
 
-        peak_idx = int(np.argmax(preds_list))
+        peak_idx = int(np.argmax(preds))
         fig.add_annotation(
             x           = timestamps[peak_idx],
-            y           = preds_list[peak_idx],
-            text        = f"Peak: {preds_list[peak_idx]:,.0f} MWh",
+            y           = preds[peak_idx],
+            text        = f"Peak: {preds[peak_idx]:,.0f} MWh",
             showarrow   = True,
             arrowhead   = 2,
             arrowcolor  = "#c62828",
@@ -256,18 +266,15 @@ def chart():
 @app.route("/download")
 def download():
     try:
-        predictions, timestamps, target_date, _ = \
-            _run_prediction()
+        predictions, timestamps, target_date = _run_forecast()
 
-        rows = []
-        for i, ts in enumerate(timestamps):
-            rows.append({
-                "hour"        : f"h+{i+1}",
-                "timestamp"   : ts,
-                "forecast_mwh": round(float(predictions[i]), 1),
-                "model"       : "XGBoost",
-                "generated_at": datetime.now().isoformat(),
-            })
+        rows = [{
+            "hour"        : f"h+{i+1}",
+            "timestamp"   : ts,
+            "forecast_mwh": round(float(predictions[i]), 1),
+            "model"       : "XGBoost",
+            "generated_at": datetime.now().isoformat(),
+        } for i, ts in enumerate(timestamps)]
 
         df  = pd.DataFrame(rows)
         buf = io.StringIO()
@@ -286,43 +293,25 @@ def download():
 
 @app.route("/debug")
 def debug():
+    """Debug endpoint — shows data status."""
     try:
-        df_hist     = _load_and_update_history()
-        target_date = _get_prediction_date(df_hist)
-        models      = load_models()
-        FEATURE_COLS= models["feature_cols"]
+        df_hist     = _load_and_fill_history()
+        target_date = _get_target_date(df_hist)
         fw          = fetch_weather_forecast()
-        X_feat      = build_inference_row(
-            df_hist, fw, target_date, FEATURE_COLS)
 
         return jsonify({
             "target_date"  : target_date,
             "hist_rows"    : len(df_hist),
             "hist_date_min": str(df_hist["timestamp"].min().date()),
             "hist_date_max": str(df_hist["timestamp"].max().date()),
-            "X_feat_shape" : list(X_feat.shape),
-            "X_feat_nulls" : int(X_feat.isnull().sum().sum()),
             "weather_rows" : len(fw) if fw is not None else 0,
+            "weather_dates": [str(d) for d in sorted(
+                fw["timestamp"].dt.date.unique()
+            )] if fw is not None else [],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# In app.py, in _run_prediction() function, after getting predictions:
-
-def _run_prediction():
-    # ... existing code ...
-    predictions = predict_24h(X_feat.values)
-    
-    # Quick fix: clip negative values to a reasonable minimum
-    # Based on typical CA demand minimum (~18,000-20,000 MW)
-    MIN_PLAUSIBLE_DEMAND = 15000  # Adjust based on your historical data
-    predictions = np.maximum(predictions, MIN_PLAUSIBLE_DEMAND)
-    
-    # Also cap extreme outliers (optional)
-    MAX_PLAUSIBLE_DEMAND = 50000
-    predictions = np.minimum(predictions, MAX_PLAUSIBLE_DEMAND)
-    
-    # ... rest of the code ...
 
 if __name__ == "__main__":
     app.run(
