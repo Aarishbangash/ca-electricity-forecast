@@ -188,7 +188,7 @@ def fetch_weather_forecast():
     """
     url    = "https://api.open-meteo.com/v1/forecast"
     params = {
-        "forecast_days"  : 2,
+        "forecast_days"  : 3,
         "hourly"         : WEATHER_VARIABLES,
         "timezone"       : TIMEZONE,
         "wind_speed_unit": "kmh",

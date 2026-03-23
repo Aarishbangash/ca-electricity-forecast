@@ -240,9 +240,12 @@
 
     // Set min and max allowed dates
     const input = document.getElementById("date-input");
+    const dayAfter = new Date();
+    dayAfter.setDate(dayAfter.getDate() + 2);
+
     input.min   = fmt(today);
-    input.max   = fmt(tomorrow);
-    input.value = fmt(tomorrow);   // default = tomorrow
+    input.max   = fmt(dayAfter);
+    input.value = fmt(today);
 })();
 
   async function loadMetrics() {

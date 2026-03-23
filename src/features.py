@@ -135,21 +135,24 @@ def build_inference_row(historical_df, forecast_weather,
         .fillna(method="bfill")
     )
 
-    # Filter forecast to target date only
+    # Filter forecast to target date
     target_dt   = pd.to_datetime(target_date).date()
+
+    # If exact date not found use the latest available date
+    available_dates = sorted(
+        forecast_weather["timestamp"].dt.date.unique())
+
+    print(f"  Available forecast dates: {available_dates}")
+    print(f"  Requested date: {target_dt}")
+
+    if target_dt not in available_dates:
+        # Use latest available date
+        target_dt = available_dates[-1]
+        print(f"  Using closest date: {target_dt}")
+
     target_rows = forecast_weather[
         forecast_weather["timestamp"].dt.date == target_dt
     ].copy()
-
-    print(f"  Target rows  : {len(target_rows)}")
-    print(f"  Target date  : {target_dt}")
-
-    if len(target_rows) == 0:
-        available = forecast_weather[
-            "timestamp"].dt.date.unique()
-        raise ValueError(
-            f"No forecast weather for {target_date}. "
-            f"Available dates: {available}")
 
     # Add placeholder demand for target rows
     # Use last known demand as placeholder
