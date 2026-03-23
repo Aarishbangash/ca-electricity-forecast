@@ -111,7 +111,7 @@ def _load_and_fill_history():
 
         cur_date += timedelta(days=1)
 
-    return df.tail(300).copy()
+    return df.tail(500).copy()
 
 
 def _get_target_date(df):
@@ -293,25 +293,41 @@ def download():
 
 @app.route("/debug")
 def debug():
-    """Debug endpoint — shows data status."""
     try:
         df_hist     = _load_and_fill_history()
         target_date = _get_target_date(df_hist)
+        models      = load_models()
+        FEATURE_COLS= models["feature_cols"]
         fw          = fetch_weather_forecast()
 
+        X_feat = build_inference_row(
+            df_hist, fw, target_date, FEATURE_COLS)
+
         return jsonify({
-            "target_date"  : target_date,
-            "hist_rows"    : len(df_hist),
-            "hist_date_min": str(df_hist["timestamp"].min().date()),
-            "hist_date_max": str(df_hist["timestamp"].max().date()),
-            "weather_rows" : len(fw) if fw is not None else 0,
-            "weather_dates": [str(d) for d in sorted(
+            "target_date"    : target_date,
+            "hist_rows"      : len(df_hist),
+            "hist_date_min"  : str(df_hist["timestamp"].min().date()),
+            "hist_date_max"  : str(df_hist["timestamp"].max().date()),
+            "weather_rows"   : len(fw) if fw is not None else 0,
+            "weather_dates"  : [str(d) for d in sorted(
                 fw["timestamp"].dt.date.unique()
             )] if fw is not None else [],
+            "X_feat_shape"   : list(X_feat.shape),
+            "X_feat_nulls"   : int(X_feat.isnull().sum().sum()),
+            "lag_1h_sample"  : float(X_feat["demand_lag_1h"].iloc[0])
+                               if "demand_lag_1h" in X_feat.columns else "missing",
+            "lag_24h_sample" : float(X_feat["demand_lag_24h"].iloc[0])
+                               if "demand_lag_24h" in X_feat.columns else "missing",
+            "raw_pred_sample": [round(float(v), 1) for v in
+                               load_models()["xgboost"].predict(
+                                   X_feat.values)[0][:4]],
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }), 500
 
 if __name__ == "__main__":
     app.run(
