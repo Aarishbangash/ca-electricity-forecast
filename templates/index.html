@@ -78,14 +78,6 @@
     }
     .panel-title { font-size:1rem; font-weight:700; color:#1a237e; }
     .controls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    input[type="date"] {
-      padding: 8px 14px;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 8px;
-      font-size: 0.88rem;
-      outline: none;
-    }
-    input[type="date"]:focus { border-color:#1a237e; }
     .btn {
       padding: 8px 20px;
       border: none;
@@ -178,20 +170,19 @@
     <div class="panel-head">
       <span class="panel-title">📈 24-Hour Demand Forecast</span>
       <div class="controls">
-  <span id="forecast-date-label"
-        style="font-size:0.9rem;color:#4a5568;
-               font-weight:600"></span>
-  <button class="btn btn-primary" onclick="loadForecast()">
-    Generate Forecast
-  </button>
-  <button class="btn btn-green" onclick="downloadCSV()">
-    ⬇ Download CSV
-  </button>
-  <div class="spinner" id="spinner"></div>
-</div>
+        <span id="forecast-date-label"
+              style="font-size:0.9rem;color:#4a5568;font-weight:600"></span>
+        <button class="btn btn-primary" onclick="loadForecast()">
+          Generate Forecast
+        </button>
+        <button class="btn btn-green" onclick="downloadCSV()">
+          ⬇ Download CSV
+        </button>
+        <div class="spinner" id="spinner"></div>
+      </div>
     </div>
     <div id="chart-placeholder">
-      Select a date and click Generate Forecast
+      Click Generate Forecast to load the next-day prediction
     </div>
     <div id="forecast-chart" style="display:none;height:420px"></div>
     <div id="error-area"></div>
@@ -210,12 +201,11 @@
             <th>Step</th>
             <th>Time</th>
             <th>Forecast (MWh)</th>
-            <th>vs Daily Average</th>
           </tr>
         </thead>
         <tbody id="table-body">
           <tr>
-            <td colspan="4" class="td-empty">
+            <td colspan="3" class="td-empty">
               No forecast yet — click Generate Forecast
             </td>
           </tr>
@@ -232,8 +222,6 @@
 </footer>
 
 <script>
-  // Default date = tomorrow
- 
   async function loadMetrics() {
     try {
       const res  = await fetch("/metrics");
@@ -289,8 +277,7 @@
         .textContent = "Predicting: " + predData.date;
 
       // Show chart
-      document.getElementById("chart-placeholder")
-        .style.display = "none";
+      document.getElementById("chart-placeholder").style.display = "none";
       const chartDiv = document.getElementById("forecast-chart");
       chartDiv.style.display = "block";
 
@@ -301,38 +288,36 @@
         { responsive:true, displayModeBar:false }
       );
 
-      // Populate table
+      // Populate table — no avg comparison, just clean hourly values
       const preds   = predData.predictions;
       const times   = predData.timestamps;
-      const avg     = preds.reduce((a,b)=>a+b,0)/preds.length;
       const peakVal = Math.max(...preds);
+      const minVal  = Math.min(...preds);
+      const avg     = preds.reduce((a,b)=>a+b,0) / preds.length;
       const tbody   = document.getElementById("table-body");
       tbody.innerHTML = "";
 
       preds.forEach((val, i) => {
-        const time  = new Date(times[i]).toLocaleTimeString(
-          "en-US",{hour:"2-digit",minute:"2-digit"});
-        const diff  = val - avg;
-        const dStr  = (diff>=0?"+":"")+diff.toFixed(0)+" MWh";
-        const isPeak= val === peakVal;
+        const time   = new Date(times[i]).toLocaleTimeString(
+          "en-US", { hour:"2-digit", minute:"2-digit" });
+        const isPeak = val === peakVal;
+        const isMin  = val === minVal;
         tbody.innerHTML += `
           <tr>
             <td>h+${i+1}</td>
             <td>${time}</td>
-            <td class="${isPeak?"td-peak":""}">
-              ${val.toLocaleString()} MWh
-              ${isPeak?" 🔺 Peak":""}
-            </td>
-            <td style="color:${diff>=0?"#c53030":"#276749"}">
-              ${dStr}
+            <td class="${isPeak ? "td-peak" : ""}">
+              ${val.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1})} MWh
+              ${isPeak ? " 🔺 Peak" : ""}
+              ${isMin  ? " 🔻 Min"  : ""}
             </td>
           </tr>`;
       });
 
       document.getElementById("table-summary").textContent =
-        `Avg: ${avg.toFixed(0)} MWh  ·  `+
-        `Peak: ${peakVal.toLocaleString()} MWh  ·  `+
-        `Min: ${Math.min(...preds).toLocaleString()} MWh`;
+        `Avg: ${avg.toFixed(0)} MWh  ·  ` +
+        `Peak: ${peakVal.toLocaleString()} MWh  ·  ` +
+        `Min: ${minVal.toLocaleString()} MWh`;
 
     } catch(e) {
       errArea.innerHTML =
