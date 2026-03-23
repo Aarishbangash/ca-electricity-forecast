@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import pickle
+import time
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -31,33 +32,80 @@ def update_dataset(api_key: str) -> bool:
 
     print(f"\n── STEP 1: Fetch {yesterday} ────────────────────")
 
-    # Retry EIA up to 3 times with delay
+    # Retry EIA up to 3 times with 30s delay
     eia_df = None
     for attempt in range(1, 4):
         print(f"  EIA attempt {attempt}/3...")
         eia_df = fetch_eia_day(api_key, yesterday)
         if eia_df is not None:
             break
-        print(f"  EIA failed — waiting 30s before retry...")
-        time.sleep(30)
+        if attempt < 3:
+            print(f"  EIA failed — waiting 30s before retry...")
+            time.sleep(30)
 
-    weather_df = fetch_weather_archive(yesterday)
-
+    # Fallback to day before yesterday
     if eia_df is None:
-        # Try day before yesterday as fallback
         print(f"  EIA failed for {yesterday} — trying day before...")
         day_before = (datetime.now() - timedelta(days=2)
                       ).strftime("%Y-%m-%d")
-        eia_df = fetch_eia_day(api_key, day_before)
-        if eia_df is None:
-            print("  ERROR: EIA completely unavailable")
-            return False
+        for attempt in range(1, 3):
+            print(f"  EIA fallback attempt {attempt}/2...")
+            eia_df = fetch_eia_day(api_key, day_before)
+            if eia_df is not None:
+                yesterday = day_before
+                break
+            time.sleep(30)
 
+    if eia_df is None:
+        print("  ERROR: EIA completely unavailable")
+        return False
+
+    # Fetch weather
+    weather_df = fetch_weather_archive(yesterday)
     if weather_df is None:
         print("  ERROR: Weather fetch failed")
         return False
 
- 
+    # Normalize timestamps
+    eia_df["timestamp"] = pd.to_datetime(
+        eia_df["timestamp"]).dt.tz_convert(TIMEZONE)
+    weather_df["timestamp"] = pd.to_datetime(
+        weather_df["timestamp"]).dt.tz_convert(TIMEZONE)
+
+    # Merge demand + weather
+    new_day = pd.merge(
+        eia_df, weather_df, on="timestamp", how="inner")
+    print(f"  New rows: {len(new_day)}")
+
+    # Load existing dataset
+    existing = pd.read_csv(DATA_PATH)
+    existing["timestamp"] = pd.to_datetime(
+        existing["timestamp"], utc=True
+    ).dt.tz_convert(TIMEZONE)
+
+    # Append + deduplicate
+    combined = (
+        pd.concat([existing, new_day], ignore_index=True)
+          .drop_duplicates("timestamp")
+          .sort_values("timestamp")
+          .reset_index(drop=True)
+    )
+
+    # Rolling 5-year window
+    cutoff   = (pd.Timestamp.now(tz=TIMEZONE)
+                - pd.DateOffset(years=5))
+    combined = combined[
+        combined["timestamp"] >= cutoff
+    ].reset_index(drop=True)
+
+    # Save
+    combined.to_csv(DATA_PATH, index=False)
+
+    print(f"  Dataset: {len(combined):,} rows")
+    print(f"  Range  : {combined.timestamp.min().date()}"
+          f" → {combined.timestamp.max().date()}")
+    return True
+
 
 def prepare_data():
     print(f"\n── STEP 2: Feature engineering ─────────────────")
@@ -123,7 +171,7 @@ def retrain_xgboost(df_train, df_val, FEATURE_COLS):
         "verbosity"       : 0,
     }
 
-    print(f"  Training...")
+    print(f"  Training XGBoost...")
     model = MultiOutputRegressor(
         XGBRegressor(**best_params), n_jobs=-1)
     model.fit(X_train, Y_train)
@@ -163,6 +211,7 @@ def save_results(model, val_mape, df_train, df_val):
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
     print(f"  Saved metrics → {metrics_path}")
+    print(f"  Metrics: {metrics}")
 
 
 def run_retrain():
@@ -186,7 +235,10 @@ def run_retrain():
     save_results(model, val_mape, df_train, df_val)
 
     print(f"\n{'='*55}")
-    print(f"  DONE — MAPE: {val_mape:.2f}%")
+    print(f"  RETRAIN COMPLETE")
+    print(f"  XGBoost val MAPE : {val_mape:.2f}%")
+    print(f"  Time             : "
+          f"{datetime.now().strftime('%H:%M UTC')}")
     print(f"{'='*55}\n")
 
 
