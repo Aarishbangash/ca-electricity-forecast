@@ -36,16 +36,23 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         (df["is_weekend"] == 1) | (df["is_holiday"] == 1)
     ).astype(int)
 
-    t = np.arange(len(df))
+    # ── Fourier features based on ACTUAL time, not row index ──
+    # This ensures inference rows get the same encoding as training
+    # hour_of_week = 0..167, hour_of_year = 0..8759
+    hour_of_day  = df["timestamp"].dt.hour.astype(float)
+    day_of_year  = df["timestamp"].dt.dayofyear.astype(float)
+    day_of_week  = df["timestamp"].dt.dayofweek.astype(float)
+    hour_of_week = day_of_week * 24 + hour_of_day
+
     for k in [1, 2]:
         df[f"sin_daily_{k}"]  = np.sin(
-            2 * np.pi * k * t / 24)
+            2 * np.pi * k * hour_of_day / 24)
         df[f"cos_daily_{k}"]  = np.cos(
-            2 * np.pi * k * t / 24)
+            2 * np.pi * k * hour_of_day / 24)
         df[f"sin_weekly_{k}"] = np.sin(
-            2 * np.pi * k * t / 168)
+            2 * np.pi * k * hour_of_week / 168)
         df[f"cos_weekly_{k}"] = np.cos(
-            2 * np.pi * k * t / 168)
+            2 * np.pi * k * hour_of_week / 168)
 
     df["CDD"] = np.maximum(
         df["temperature_c"] - BASE_TEMP, 0)
@@ -95,12 +102,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
               .rolling(window, min_periods=1).mean()
         )
 
-        # ── temp_bin feature ──────────────────────────────────
-    df["temp_bin"] = pd.cut(
-        df["temperature_c"],
-        bins    = [-np.inf, 5, 10, 15, 20, 25, 30, np.inf],
-        labels  = [0, 1, 2, 3, 4, 5, 6]
-    ).astype(float)
     return df
 
 
@@ -118,48 +119,56 @@ def build_inference_row(historical_df, forecast_weather,
         historical_df["timestamp"]
     ).dt.tz_convert(TIMEZONE)
 
-    # Sort history and keep enough rows for all lags
-    # Max lag = 168h (1 week) so need at least 168 rows
+    # Need at least 168 rows for the largest lag (168h = 1 week)
     historical_df = historical_df.sort_values(
         "timestamp").tail(200).reset_index(drop=True)
 
-    # Check we have enough history
     print(f"  History rows : {len(historical_df)}")
     print(f"  History end  : {historical_df['timestamp'].max()}")
     print(f"  Null demand  : {historical_df['demand_mwh'].isna().sum()}")
 
-    # Fill any null demand with forward fill then backfill
+    # Fix deprecated fillna(method=...) 
     historical_df["demand_mwh"] = (
         historical_df["demand_mwh"]
-        .fillna(method="ffill")
-        .fillna(method="bfill")
+        .ffill()
+        .bfill()
     )
 
-    # Filter forecast to target date
-    target_dt   = pd.to_datetime(target_date).date()
+    target_dt = pd.to_datetime(target_date).date()
 
-    # If exact date not found use the latest available date
     available_dates = sorted(
         forecast_weather["timestamp"].dt.date.unique())
 
     print(f"  Available forecast dates: {available_dates}")
-    print(f"  Requested date: {target_dt}")
+    print(f"  Requested target date   : {target_dt}")
 
-    if target_dt not in available_dates:
-        # Use latest available date
-        target_dt = available_dates[-1]
-        print(f"  Using closest date: {target_dt}")
+    # Pick the closest available forecast date to target_dt
+    # Prefer exact match, otherwise use nearest future date,
+    # fallback to nearest past date
+    if target_dt in available_dates:
+        use_dt = target_dt
+    else:
+        future_dates = [d for d in available_dates if d >= target_dt]
+        if future_dates:
+            use_dt = future_dates[0]
+        else:
+            use_dt = available_dates[-1]
+        print(f"  Target date not in forecast — using: {use_dt}")
 
     target_rows = forecast_weather[
-        forecast_weather["timestamp"].dt.date == target_dt
+        forecast_weather["timestamp"].dt.date == use_dt
     ].copy()
 
-    # Add placeholder demand for target rows
-    # Use last known demand as placeholder
+    # Restamp target_rows to the actual target_date
+    # so that lag features and Fourier features are correct
+    if use_dt != target_dt:
+        delta = pd.Timestamp(target_dt) - pd.Timestamp(use_dt)
+        target_rows["timestamp"] = target_rows["timestamp"] + delta
+
+    # Add placeholder demand (last known value)
     last_known_demand = historical_df["demand_mwh"].iloc[-1]
     target_rows["demand_mwh"] = last_known_demand
 
-    # Keep only needed columns
     keep_cols = ["timestamp", "demand_mwh",
                  "temperature_c", "humidity_pct",
                  "wind_speed_kmh", "solar_radiation_wm2",
@@ -168,7 +177,6 @@ def build_inference_row(historical_df, forecast_weather,
     hist_cols = [c for c in keep_cols
                  if c in historical_df.columns]
 
-    # Combine history + target
     combined = pd.concat(
         [historical_df[hist_cols],
          target_rows[keep_cols]],
@@ -177,17 +185,15 @@ def build_inference_row(historical_df, forecast_weather,
 
     print(f"  Combined rows: {len(combined)}")
 
-    # Build features on combined data
     featured = build_features(combined)
 
-    # Return only target date rows
+    # Extract target date rows using the actual target_dt
     mask   = (featured["timestamp"].dt.date == target_dt)
     result = featured[mask].copy()
 
     print(f"  Result rows  : {len(result)}")
     print(f"  Result nulls : {result[feature_cols].isnull().sum().sum()}")
 
-    # Fill any remaining nulls with 0
     for c in feature_cols:
         if c not in result.columns:
             result[c] = 0.0
