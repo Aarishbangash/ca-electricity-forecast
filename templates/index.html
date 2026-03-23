@@ -299,7 +299,8 @@
 
       preds.forEach((val, i) => {
         const time   = new Date(times[i]).toLocaleTimeString(
-          "en-US", { hour:"2-digit", minute:"2-digit" });
+          "en-US", { hour:"2-digit", minute:"2-digit",
+                     timeZone: "America/Los_Angeles" });
         const isPeak = val === peakVal;
         const isMin  = val === minVal;
         tbody.innerHTML += `
