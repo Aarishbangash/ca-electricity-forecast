@@ -25,52 +25,39 @@ MODEL_DIR = os.path.join(ROOT, "models")
 HORIZON   = 24
 
 
-def update_dataset(api_key):
+def update_dataset(api_key: str) -> bool:
     yesterday = (datetime.now() - timedelta(days=1)
                  ).strftime("%Y-%m-%d")
 
     print(f"\n── STEP 1: Fetch {yesterday} ────────────────────")
 
-    eia_df     = fetch_eia_day(api_key, yesterday)
+    # Retry EIA up to 3 times with delay
+    eia_df = None
+    for attempt in range(1, 4):
+        print(f"  EIA attempt {attempt}/3...")
+        eia_df = fetch_eia_day(api_key, yesterday)
+        if eia_df is not None:
+            break
+        print(f"  EIA failed — waiting 30s before retry...")
+        time.sleep(30)
+
     weather_df = fetch_weather_archive(yesterday)
 
-    if eia_df is None or weather_df is None:
-        print("  ERROR: fetch failed")
+    if eia_df is None:
+        # Try day before yesterday as fallback
+        print(f"  EIA failed for {yesterday} — trying day before...")
+        day_before = (datetime.now() - timedelta(days=2)
+                      ).strftime("%Y-%m-%d")
+        eia_df = fetch_eia_day(api_key, day_before)
+        if eia_df is None:
+            print("  ERROR: EIA completely unavailable")
+            return False
+
+    if weather_df is None:
+        print("  ERROR: Weather fetch failed")
         return False
 
-    eia_df["timestamp"] = pd.to_datetime(
-        eia_df["timestamp"]).dt.tz_convert(TIMEZONE)
-    weather_df["timestamp"] = pd.to_datetime(
-        weather_df["timestamp"]).dt.tz_convert(TIMEZONE)
-
-    new_day = pd.merge(
-        eia_df, weather_df, on="timestamp", how="inner")
-
-    existing = pd.read_csv(DATA_PATH)
-    existing["timestamp"] = pd.to_datetime(
-        existing["timestamp"], utc=True
-    ).dt.tz_convert(TIMEZONE)
-
-    combined = (
-        pd.concat([existing, new_day], ignore_index=True)
-          .drop_duplicates("timestamp")
-          .sort_values("timestamp")
-          .reset_index(drop=True)
-    )
-
-    cutoff   = (pd.Timestamp.now(tz=TIMEZONE)
-                - pd.DateOffset(years=5))
-    combined = combined[
-        combined["timestamp"] >= cutoff
-    ].reset_index(drop=True)
-
-    combined.to_csv(DATA_PATH, index=False)
-
-    print(f"  Dataset: {len(combined):,} rows")
-    print(f"  Range  : {combined.timestamp.min().date()}"
-          f" → {combined.timestamp.max().date()}")
-    return True
-
+ 
 
 def prepare_data():
     print(f"\n── STEP 2: Feature engineering ─────────────────")

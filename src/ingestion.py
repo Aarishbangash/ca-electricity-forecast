@@ -33,10 +33,10 @@ WEATHER_VARIABLES = [
 
 def make_session():
     session = requests.Session()
-    retry   = Retry(
-        total            = 5,
-        backoff_factor   = 3,
-        status_forcelist = [429, 500, 502, 503, 504],
+    retry = Retry(
+    total            = 7,
+    backoff_factor   = 5,
+    status_forcelist = [429, 500, 502, 503, 504],
     )
     session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
