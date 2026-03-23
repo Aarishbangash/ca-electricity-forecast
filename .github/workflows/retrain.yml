@@ -2,7 +2,7 @@ name: Daily Model Retrain
 
 on:
   schedule:
-    - cron: '45 11 * * *'
+    - cron: '0 13 * * *'
   workflow_dispatch:
 
 jobs:
