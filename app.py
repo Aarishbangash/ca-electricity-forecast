@@ -169,7 +169,7 @@ def health():
 
 @app.route("/metrics")
 def metrics():
-    return jsonify(get_metrics())
+    return jsonify(get_metrics(reload=True))
 
 
 @app.route("/predict")
@@ -307,6 +307,22 @@ def debug():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# In app.py, in _run_prediction() function, after getting predictions:
+
+def _run_prediction():
+    # ... existing code ...
+    predictions = predict_24h(X_feat.values)
+    
+    # Quick fix: clip negative values to a reasonable minimum
+    # Based on typical CA demand minimum (~18,000-20,000 MW)
+    MIN_PLAUSIBLE_DEMAND = 15000  # Adjust based on your historical data
+    predictions = np.maximum(predictions, MIN_PLAUSIBLE_DEMAND)
+    
+    # Also cap extreme outliers (optional)
+    MAX_PLAUSIBLE_DEMAND = 50000
+    predictions = np.minimum(predictions, MAX_PLAUSIBLE_DEMAND)
+    
+    # ... rest of the code ...
 
 if __name__ == "__main__":
     app.run(

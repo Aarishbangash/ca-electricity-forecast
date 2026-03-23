@@ -112,3 +112,27 @@ def update_dataset(api_key: str) -> bool:
     )
 
     return True
+
+# Add this function to retrain.py
+
+def save_demand_stats(df):
+    """
+    Save demand statistics for post-processing clipping.
+    """
+    demand_stats = {
+        "min": float(df["demand_mwh"].min()),
+        "max": float(df["demand_mwh"].max()),
+        "mean": float(df["demand_mwh"].mean()),
+        "median": float(df["demand_mwh"].median()),
+        "std": float(df["demand_mwh"].std()),
+    }
+    
+    stats_path = os.path.join(os.path.dirname(__file__), "..", "models", "demand_stats.json")
+    with open(stats_path, "w") as f:
+        json.dump(demand_stats, f, indent=2)
+    
+    print(f"  Demand stats saved: min={demand_stats['min']:.0f}, max={demand_stats['max']:.0f}")
+    return demand_stats
+
+# Then call it after updating the dataset in your main retrain function:
+# save_demand_stats(combined)
