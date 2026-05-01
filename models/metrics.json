@@ -1,8 +1,8 @@
 {
-  "last_retrain": "2026-04-30T05:39:25.018387",
-  "train_rows": 36861,
-  "val_rows": 6505,
-  "xgboost_mape": 4.1654,
-  "data_from": "2021-04-29",
-  "data_to": "2026-04-29"
+  "last_retrain": "2026-05-01T05:51:23.881059",
+  "train_rows": 36855,
+  "val_rows": 6504,
+  "xgboost_mape": 4.155,
+  "data_from": "2021-04-30",
+  "data_to": "2026-04-30"
 }
